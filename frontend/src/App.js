@@ -23,18 +23,17 @@ function App() {
     }
   }, [messages]);
 
-  // ✅ SAFE CRM AUTOFILL (IMPORTANT FIX)
+  // ✅ FIXED: ALWAYS FORCE FORM UPDATE
   const applyAIUpdate = (data) => {
     if (!data || typeof data !== "object") return;
 
     setForm((prev) => ({
-      ...prev,
-      hcp_name: data.hcp_name || prev.hcp_name,
-      interaction_type: data.interaction_type || prev.interaction_type,
-      date: data.date || prev.date,   // 🔥 FIX HERE
-      time: data.time || prev.time,
-      topics: data.topics || prev.topics,
-      sentiment: data.sentiment || prev.sentiment,
+      hcp_name: data.hcp_name ?? prev.hcp_name,
+      interaction_type: data.interaction_type ?? prev.interaction_type,
+      date: data.date ?? prev.date,
+      time: data.time ?? prev.time,
+      topics: data.topics ?? prev.topics,
+      sentiment: data.sentiment ?? prev.sentiment,
     }));
   };
 
@@ -49,10 +48,10 @@ function App() {
         message,
       });
 
-      console.log("FULL RESPONSES:", res.data);
+      console.log("API RESPONSE:", res.data);
 
-      // ✅ SAFE extraction handling (CRITICAL FIX)
-      const extracted = res.data.extracted || {};
+      // ✅ FIX: support BOTH extracted + updated
+      const data = res.data.extracted ?? res.data.updated ?? {};
 
       // Add bot response
       setMessages((prev) => [
@@ -60,8 +59,8 @@ function App() {
         { role: "bot", text: res.data.response || "Done" },
       ]);
 
-      // Autofill CRM form
-      applyAIUpdate(extracted);
+      // ✅ Update CRM form
+      applyAIUpdate(data);
 
       setMessage("");
     } catch (err) {

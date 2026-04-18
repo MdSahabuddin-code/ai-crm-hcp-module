@@ -2,39 +2,26 @@ from langgraph.graph import StateGraph
 from llm import extract_data
 from datetime import datetime, timedelta
 from dateutil import parser
+import re
 
-# ✅ DB IMPORTS
 from db import SessionLocal
 from models import Interaction
 
 
-# -----------------------------
-# SMART DATE/TIME NORMALIZER
-# -----------------------------
-
-from datetime import datetime, timedelta
-from dateutil import parser
-import re
+# =====================================================
+# SMART NORMALIZER (FIXED)
+# =====================================================
 def normalize_date_time(date_raw, time_raw):
-    from datetime import datetime, timedelta
-    from dateutil import parser
-    import re
-
     today = datetime.now()
 
     date_final = None
     time_final = None
 
-    # -----------------------
-    # DATE FIX (ROBUST)
-    # -----------------------
+    # ---------------- DATE ----------------
     if date_raw:
-        text = date_raw.lower().strip()
+        text = str(date_raw).lower().strip()
 
         try:
-            # -------------------------
-            # Natural words first
-            # -------------------------
             if "today" in text:
                 date_final = today
 
@@ -48,34 +35,22 @@ def normalize_date_time(date_raw, time_raw):
                 date_final = today + timedelta(days=7)
 
             else:
-                # -------------------------
-                # SMART DATE PARSING FIX
-                # -------------------------
-                # If format is numeric like 10/2/2025
-                if re.match(r"\d{1,2}[/-]\d{1,2}[/-]\d{4}", date_raw):
-                    parts = re.split(r"[/-]", date_raw)
-                    d, m, y = parts
+                match = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text)
 
-                    # assume DD/MM/YYYY (India format)
+                if match:
+                    d, m, y = re.split(r"[/-]", match.group(1))
                     date_final = datetime(int(y), int(m), int(d))
-
                 else:
-                    # fallback safe parser
-                    date_final = parser.parse(date_raw)
+                    date_final = parser.parse(text)
 
         except:
             date_final = None
 
-    # -----------------------
-    # TIME FIX (VERY IMPORTANT)
-    # supports:
-    # 4pm, 4 pm, 4:30pm, 4.30 pm
-    # -----------------------
+    # ---------------- TIME ----------------
     if time_raw:
         try:
-            t = time_raw.lower().strip().replace(" ", "")
+            t = str(time_raw).lower().replace(" ", "")
 
-            # 🔥 FIX: allow : or . as separator
             match = re.match(r"(\d{1,2})([:.](\d{2}))?(am|pm)?", t)
 
             if match:
@@ -100,26 +75,18 @@ def normalize_date_time(date_raw, time_raw):
         time_final
     )
 
-# -----------------------------
-# TOOLS
-# -----------------------------
 
-# ✅ LOG TOOL (SAVE TO DB)
+# =====================================================
+# LOG TOOL
+# =====================================================
 def log_tool(state):
     text = state["input"]
-
     structured = extract_data(text)
-
-    # ✅ DEBUG (VERY IMPORTANT)
-    print("STRUCTURED:", structured)
 
     date, time = normalize_date_time(
         structured.get("date_raw"),
         structured.get("time")
     )
-
-    print("NORMALIZED DATE:", date)
-    print("NORMALIZED TIME:", time)
 
     db = SessionLocal()
 
@@ -134,80 +101,147 @@ def log_tool(state):
 
     db.add(new_entry)
     db.commit()
-    db.refresh(new_entry)   # ✅ IMPORTANT FIX
+    db.refresh(new_entry)
 
-    result = {
-        "output": "✅ Interaction saved to database",
-        "extracted": {
-            "hcp_name": new_entry.hcp_name,
-            "interaction_type": new_entry.interaction_type,
-            "sentiment": new_entry.sentiment,
-            "date": new_entry.date,
-            "time": new_entry.time,
-            "topics": new_entry.topics,
-        }
+    # ✅ STORE DATA BEFORE closing session (important)
+    result_data = {
+        "hcp_name": new_entry.hcp_name,
+        "interaction_type": new_entry.interaction_type,
+        "sentiment": new_entry.sentiment,
+        "date": new_entry.date,
+        "time": new_entry.time,
+        "topics": new_entry.topics,
     }
 
     db.close()
-    return result
 
-# ✅ EDIT TOOL (UPDATE DB)
+    return {
+        "output": "✅ Interaction saved to database",
+        "extracted": result_data   # ✅ THIS FIXES YOUR UI
+    }
+
+# =====================================================
+# EDIT TOOL (FULL FIX)
+# =====================================================
 def edit_tool(state):
     db = SessionLocal()
-    interaction = db.query(Interaction).first()
+    text = state.get("input", "").lower()
 
-    if interaction:
-        interaction.topics = "Updated via AI"
-        db.commit()
+    interaction_id = state.get("interaction_id")
+
+    if interaction_id:
+        interaction = db.query(Interaction).filter_by(id=interaction_id).first()
+    else:
+        interaction = db.query(Interaction).order_by(Interaction.id.desc()).first()
+
+    if not interaction:
+        return {"output": "No interaction found"}
+
+    # ---------------- NAME ----------------
+    dr_match = re.search(r"dr\.?\s+[a-z]+", text, re.IGNORECASE)
+    if dr_match:
+        interaction.hcp_name = dr_match.group()
+
+    # ---------------- TOPICS ----------------
+    if "topic" in text or "product" in text:
+        interaction.topics = text.replace("edit last interaction", "").strip()
+
+    # ---------------- TIME ----------------
+    time_match = re.search(r"(\d{1,2})([:.]?\d{2})?\s?(am|pm)", text)
+
+    if time_match:
+        hour = int(time_match.group(1))
+
+        minute_raw = time_match.group(2)
+        minute = int(minute_raw.replace(":", "").replace(".", "")) if minute_raw else 0
+
+        mer = time_match.group(3)
+
+        if mer == "pm" and hour != 12:
+            hour += 12
+        if mer == "am" and hour == 12:
+            hour = 0
+
+        interaction.time = f"{hour:02d}:{minute:02d}"
+
+    # ---------------- DATE ----------------
+    date_match = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text)
+
+    if date_match:
+        try:
+            d, m, y = re.split(r"[/-]", date_match.group(1))
+            interaction.date = datetime(int(y), int(m), int(d)).strftime("%Y-%m-%d")
+        except:
+            pass
+
+    elif "yesterday" in text:
+        interaction.date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    elif "today" in text:
+        interaction.date = datetime.now().strftime("%Y-%m-%d")
+
+    elif "tomorrow" in text:
+        interaction.date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    db.commit()
+    db.refresh(interaction)  # ✅ VERY IMPORTANT
+
+    # ✅ SAVE DATA BEFORE closing DB
+    updated_data = {
+        "hcp_name": interaction.hcp_name,
+        "interaction_type": interaction.interaction_type,
+        "sentiment": interaction.sentiment,
+        "date": interaction.date,
+        "time": interaction.time,
+        "topics": interaction.topics,
+    }
 
     db.close()
-    return {"output": "✏️ Interaction updated in database"}
 
+    return {
+        "output": "✏️ Interaction updated successfully",
+        "updated": updated_data   # ✅ THIS FIXES FRONTEND
+    }
 
-# ✅ HISTORY TOOL (FETCH FROM DB)
+# =====================================================
+# HISTORY TOOL
+# =====================================================
 def history_tool(state):
     db = SessionLocal()
     data = db.query(Interaction).all()
     db.close()
 
-    if not data:
-        return {"output": "No history found"}
+    formatted = [
+        f"\n{d.hcp_name} | {d.date or ''} {d.time or ''} | {d.topics}"
+        for d in data
+    ]
 
-    formatted = []
-    for d in data:
-        formatted.append(
-            f"{d.hcp_name} | {d.date or ''} {d.time or ''} | {d.topics}"
-        )
-
-    return {
-        "output": "📜 Interaction History:\n" + "\n".join(formatted)
-    }
+    return {"output": "📜 Interaction History:\n" + "\n".join(formatted)}
 
 
-# ✅ SUGGEST TOOL (AI-LIKE RESPONSE)
+# =====================================================
+# SUGGEST TOOL
+# =====================================================
 def suggest_tool(state):
-    return {
-        "output": "💡 AI Suggestion: Schedule a follow-up visit tomorrow and share product samples"
-    }
+    return {"output": "💡 AI Suggestion: Schedule follow-up visit and share samples"}
 
 
-# ✅ SUMMARIZE TOOL
+# =====================================================
+# SUMMARY TOOL
+# =====================================================
 def summarize_tool(state):
     db = SessionLocal()
-    interactions = db.query(Interaction).all()
+    data = db.query(Interaction).all()
     db.close()
 
-    if not interactions:
-        return {"output": "No data to summarize"}
-
-    return {
-        "output": "🧠 Summary: Most interactions are positive. Doctors show interest in discussed treatments."
-    }
+    return {"output": "🧠 Summary: Mostly positive doctor interactions with strong engagement."}
 
 
-
+# =====================================================
+# ROUTER
+# =====================================================
 def router(state):
-    text = state.get("input", "").lower() if isinstance(state, dict) else str(state).lower()
+    text = state.get("input", "").lower()
 
     if "history" in text:
         return "history"
@@ -219,12 +253,11 @@ def router(state):
         return "summarize"
 
     return "log"
-# -----------------------------
-# GRAPH (CORRECT FINAL)
-# -----------------------------
-# -----------------------------
-# GRAPH (FIXED)
-# -----------------------------
+
+
+# =====================================================
+# LANGGRAPH SETUP
+# =====================================================
 builder = StateGraph(dict)
 
 builder.add_node("log", log_tool)
