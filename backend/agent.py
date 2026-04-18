@@ -1,3 +1,4 @@
+
 from langgraph.graph import StateGraph
 from llm import extract_data
 from datetime import datetime, timedelta
@@ -138,9 +139,10 @@ def edit_tool(state):
         return {"output": "No interaction found"}
 
     # ---------------- NAME ----------------
-    dr_match = re.search(r"dr\.?\s+[a-z]+", text, re.IGNORECASE)
+    dr_match = re.search(r"dr\.?\s+[a-z]+(?:\s+[a-z]+)*", text, re.IGNORECASE)
     if dr_match:
-        interaction.hcp_name = dr_match.group()
+        name = dr_match.group()
+        interaction.hcp_name = name.title()   # ✅ makes "Dr John Smith"
 
     # ---------------- TOPICS ----------------
     if "topic" in text or "product" in text:
@@ -182,6 +184,15 @@ def edit_tool(state):
 
     elif "tomorrow" in text:
         interaction.date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # ---------------- SENTIMENT ----------------
+    if "positive" in text:
+        interaction.sentiment = "Positive"
+
+    elif "negative" in text:
+        interaction.sentiment = "Negative"
+
+    elif "neutral" in text:
+        interaction.sentiment = "Neutral"
 
     db.commit()
     db.refresh(interaction)  # ✅ VERY IMPORTANT
@@ -212,7 +223,7 @@ def history_tool(state):
     db.close()
 
     formatted = [
-        f"\n{d.hcp_name} | {d.date or ''} {d.time or ''} | {d.topics}"
+        f"\n{d.hcp_name} | {d.date or ''} {d.time or ''} | {d.topics} | {d.sentiment}"
         for d in data
     ]
 
@@ -236,12 +247,26 @@ def summarize_tool(state):
 
     return {"output": "🧠 Summary: Mostly positive doctor interactions with strong engagement."}
 
+# =====================================================
+# Clear Tool Database all Interactions
+# =====================================================
+def clear_tool(state):
+    db = SessionLocal()
+    db.query(Interaction).delete()
+    db.commit()
+    db.close()
+
+    return {
+        "output": "🧹 All interactions cleared successfully"
+    }
 
 # =====================================================
 # ROUTER
 # =====================================================
 def router(state):
     text = state.get("input", "").lower()
+    if "clear" in text or "delete" in text:
+        return "clear"
 
     if "history" in text:
         return "history"
@@ -265,6 +290,7 @@ builder.add_node("edit", edit_tool)
 builder.add_node("history", history_tool)
 builder.add_node("suggest", suggest_tool)
 builder.add_node("summarize", summarize_tool)
+builder.add_node("clear", clear_tool)
 
 builder.set_conditional_entry_point(
     router,
@@ -273,7 +299,8 @@ builder.set_conditional_entry_point(
         "edit": "edit",
         "history": "history",
         "suggest": "suggest",
-        "summarize": "summarize"
+        "summarize": "summarize",
+        "clear": "clear"   # 🔥 THIS LINE FIXES YOUR ERROR
     }
 )
 

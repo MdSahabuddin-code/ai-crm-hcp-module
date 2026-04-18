@@ -32,7 +32,8 @@ def chat(data: ChatInput):
 
     return {
         "response": result.get("output", ""),
-        "extracted": result.get("extracted", {})
+        "extracted": result.get("extracted"),
+        "updated": result.get("updated")   # ✅ ADD THIS
     }
 
 @app.get("/clear")

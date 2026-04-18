@@ -27,14 +27,16 @@ function App() {
   const applyAIUpdate = (data) => {
     if (!data || typeof data !== "object") return;
 
-    setForm((prev) => ({
-      hcp_name: data.hcp_name ?? prev.hcp_name,
-      interaction_type: data.interaction_type ?? prev.interaction_type,
-      date: data.date ?? prev.date,
-      time: data.time ?? prev.time,
-      topics: data.topics ?? prev.topics,
-      sentiment: data.sentiment ?? prev.sentiment,
-    }));
+    console.log("APPLYING:", data); // 👈 DEBUG
+
+    setForm({
+      hcp_name: data.hcp_name || "",
+      interaction_type: data.interaction_type || "Meeting",
+      date: data.date || "",
+      time: data.time || "",
+      topics: data.topics || "",
+      sentiment: data.sentiment || "Neutral",
+    });
   };
 
   // ✅ SEND MESSAGE TO BACKEND
@@ -48,19 +50,19 @@ function App() {
         message,
       });
 
-      console.log("API RESPONSE:", res.data);
+      console.log("FULL RESPONSES:", res.data);
 
-      // ✅ FIX: support BOTH extracted + updated
-      const data = res.data.extracted ?? res.data.updated ?? {};
+      const data = res.data.extracted || res.data.updated;
 
-      // Add bot response
       setMessages((prev) => [
         ...prev,
         { role: "bot", text: res.data.response || "Done" },
       ]);
 
-      // ✅ Update CRM form
-      applyAIUpdate(data);
+      // 🚀 CRITICAL FIX
+      if (data && Object.keys(data).length > 0) {
+        applyAIUpdate(data);
+      }
 
       setMessage("");
     } catch (err) {
